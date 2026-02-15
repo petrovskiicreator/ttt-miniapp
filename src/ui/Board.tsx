@@ -1,15 +1,19 @@
 import { useGameStore } from "../state/useGameStore";
+import type { Board as BoardType } from "../engine/ttt";
 
-export function Board() {
-  const board = useGameStore((s) => s.board);
+export function Board(props: { board?: BoardType; onCellClick?: (idx: number) => void }) {
+  const storeBoard = useGameStore((s) => s.board);
   const clickCell = useGameStore((s) => s.clickCell);
+
+  const board = props.board ?? storeBoard;
+  const onCellClick = props.onCellClick ?? clickCell;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 90px)", gap: 10 }}>
       {Array.from({ length: 9 }).map((_, i) => (
         <button
           key={i}
-          onClick={() => clickCell(i)}
+          onClick={() => onCellClick(i)}
           style={{
             width: 90,
             height: 90,
