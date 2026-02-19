@@ -11,7 +11,7 @@ function getGameIdFromUrl(): string | null {
 }
 
 export function GamePage() {
-  // --- local/bot store ---
+  // --- store (локально/бот) ---
   const mode = useGameStore((s) => s.mode);
   const setMode = useGameStore((s) => s.setMode);
 
@@ -22,28 +22,32 @@ export function GamePage() {
   const setHumanSymbol = useGameStore((s) => s.setHumanSymbol);
 
   const newGame = useGameStore((s) => s.newGame);
+  const winner = useGameStore((s) => s.winner);
+  const turn = useGameStore((s) => s.turn);
 
-  // --- PvP state ---
+  // --- PvP ---
   const myId = useMemo(() => getTelegramUserId(), []);
   const [pvpId, setPvpId] = useState<string | null>(null);
   const [pvpGame, setPvpGame] = useState<GameRow | null>(null);
   const [pvpError, setPvpError] = useState<string | null>(null);
+
+  const isPvp = !!pvpId;
 
   const myPvpSymbol = useMemo(() => {
     if (!pvpGame) return null;
     return mySymbol(pvpGame, myId);
   }, [pvpGame, myId]);
 
-  // 1) Если открыли по ссылке ?game=... → join
+  // если открыли по ссылке ?game=... → join
   useEffect(() => {
-    const gameId = getGameIdFromUrl();
-    if (!gameId) return;
+    const gid = getGameIdFromUrl();
+    if (!gid) return;
 
     (async () => {
       try {
         setPvpError(null);
-        const g = await joinGame(gameId, myId);
-        setPvpId(gameId);
+        const g = await joinGame(gid, myId);
+        setPvpId(gid);
         setPvpGame(g);
       } catch (e: any) {
         setPvpError(String(e?.message ?? e));
@@ -51,7 +55,7 @@ export function GamePage() {
     })();
   }, [myId]);
 
-  // 2) Polling раз в 1 сек
+  // polling (потом заменим на realtime)
   useEffect(() => {
     if (!pvpId) return;
 
@@ -60,14 +64,13 @@ export function GamePage() {
         const g = await getGame(pvpId);
         setPvpGame(g);
       } catch {
-        // игнор
+        // ignore
       }
     }, 1000);
 
     return () => clearInterval(interval);
   }, [pvpId]);
 
-  // 3) Создать PvP игру и скопировать ссылку
   async function onCreatePvp() {
     try {
       setPvpError(null);
@@ -78,12 +81,8 @@ export function GamePage() {
         await navigator.clipboard.writeText(link);
         alert("Ссылка скопирована:\n" + link);
       } catch {
-        // если clipboard не доступен
         prompt("Скопируй ссылку:", link);
       }
-
-      // (опционально) можно сразу перейти в свой матч
-      // window.location.href = link;
 
       setPvpId(g.id);
       setPvpGame(g);
@@ -92,33 +91,29 @@ export function GamePage() {
     }
   }
 
-  // 4) Ход в PvP
   async function onPvpCellClick(idx: number) {
     if (!pvpId || !pvpGame) return;
+
+    // ждём второго игрока
+    if (!pvpGame.player_o) return;
+
+    // игра закончена
+    if (pvpGame.winner) return;
+
+    const s = mySymbol(pvpGame, myId);
+    if (!s) return;
+
+    // не твой ход
+    if (pvpGame.turn !== s) return;
+
     try {
       setPvpError(null);
       const g = await makeMove(pvpId, myId, idx);
       setPvpGame(g);
     } catch (e: any) {
-      // можно показывать мягко, без алерта
       setPvpError(String(e?.message ?? e));
     }
   }
-
-  // --- Что отображаем: PvP или обычную игру ---
-  const isPvp = !!pvpId;
-
-  // для Board
-  const boardForUi = isPvp && pvpGame ? pvpGame.board : useGameStore.getState().board;
-  const winnerForUi = isPvp && pvpGame ? pvpGame.winner : useGameStore.getState().winner;
-
-  const turnText = isPvp
-    ? pvpGame
-      ? `Ход: ${pvpGame.turn}${myPvpSymbol ? ` (ты: ${myPvpSymbol})` : ""}`
-      : "Загрузка PvP..."
-    : winnerForUi === null
-      ? `Ход: ${mode === "bot" ? human : useGameStore.getState().turn}`
-      : "";
 
   return (
     <div style={{ padding: 16, fontFamily: "system-ui, sans-serif" }}>
@@ -130,7 +125,6 @@ export function GamePage() {
         {isPvp ? (
           <button
             onClick={() => {
-              // выйти из PvP и вернуться в обычные режимы
               setPvpId(null);
               setPvpGame(null);
               setPvpError(null);
@@ -176,32 +170,38 @@ export function GamePage() {
         )}
       </div>
 
-      {/* Важно: Board теперь должен принимать props (см. ниже) */}
-      <Board board={boardForUi} onCellClick={isPvp ? onPvpCellClick : undefined} />
+      {/* Ключевой фикс:
+          - в PvP передаём board и обработчик
+          - иначе рендерим <Board /> как раньше (из store) */}
+      {isPvp ? (
+        <Board board={pvpGame?.board ?? "........."} onCellClick={onPvpCellClick} />
+      ) : (
+        <Board />
+      )}
 
       <div style={{ marginTop: 12 }}>
-        {winnerForUi === null ? (
-          <b>{turnText}</b>
-        ) : winnerForUi === "draw" ? (
+        {isPvp ? (
+          pvpGame?.winner === null ? (
+            <b>
+              Ход: {pvpGame.turn}
+              {myPvpSymbol ? ` (ты: ${myPvpSymbol})` : ""}
+              {!pvpGame.player_o ? " — ждём второго игрока…" : ""}
+            </b>
+          ) : pvpGame?.winner === "draw" ? (
+            <b>Ничья</b>
+          ) : (
+            <b>Победил: {pvpGame?.winner}</b>
+          )
+        ) : winner === null ? (
+          <b>Ход: {mode === "bot" ? human : turn}</b>
+        ) : winner === "draw" ? (
           <b>Ничья</b>
         ) : (
-          <b>Победил: {winnerForUi}</b>
+          <b>Победил: {winner}</b>
         )}
       </div>
 
-      {isPvp && (
-        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-          <div>PvP gameId: {pvpId}</div>
-          <div>Ты: {myPvpSymbol ?? "наблюдатель"}</div>
-          {pvpGame?.player_o ? <div>Игрок O подключился ✅</div> : <div>Ждём игрока O…</div>}
-        </div>
-      )}
-
-      {pvpError && (
-        <div style={{ marginTop: 10, color: "crimson" }}>
-          Ошибка: {pvpError}
-        </div>
-      )}
+      {pvpError && <div style={{ marginTop: 10, color: "crimson" }}>Ошибка: {pvpError}</div>}
     </div>
   );
 }
